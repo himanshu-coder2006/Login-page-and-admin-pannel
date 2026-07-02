@@ -5,20 +5,75 @@ import express from 'express'
 import jwt from 'jsonwebtoken'
 import mongoose from 'mongoose'
 import crypto from 'node:crypto'
+import fs from 'node:fs'
+import path from 'node:path'
 
 dotenv.config()
 
 const app = express()
 const MONGODB_URI =
   process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/mern-login-app'
+const MONGODB_TIMEOUT_MS = Number(process.env.MONGODB_TIMEOUT_MS || 10000)
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me'
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@example.com'
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin123'
+const LOCAL_STORE_PATH =
+  process.env.LOCAL_STORE_PATH || path.join(process.cwd(), '.data', 'local-store.json')
 
 let mongoConnectionPromise = null
 let useLocalStore = false
 const localUsers = []
 const localLoginLogs = []
+
+const toDate = (value) => (value ? new Date(value) : null)
+
+const loadLocalStore = () => {
+  try {
+    if (!fs.existsSync(LOCAL_STORE_PATH)) {
+      return
+    }
+
+    const store = JSON.parse(fs.readFileSync(LOCAL_STORE_PATH, 'utf8'))
+
+    localUsers.push(
+      ...(store.users || []).map((user) => ({
+        ...user,
+        createdAt: toDate(user.createdAt) || new Date(),
+        lastLoginAt: toDate(user.lastLoginAt),
+      })),
+    )
+
+    localLoginLogs.push(
+      ...(store.loginLogs || []).map((log) => ({
+        ...log,
+        createdAt: toDate(log.createdAt) || new Date(),
+      })),
+    )
+  } catch (error) {
+    console.error('Local store load failed:', error.message)
+  }
+}
+
+const saveLocalStore = () => {
+  try {
+    fs.mkdirSync(path.dirname(LOCAL_STORE_PATH), { recursive: true })
+    fs.writeFileSync(
+      LOCAL_STORE_PATH,
+      JSON.stringify(
+        {
+          users: localUsers,
+          loginLogs: localLoginLogs,
+        },
+        null,
+        2,
+      ),
+    )
+  } catch (error) {
+    console.error('Local store save failed:', error.message)
+  }
+}
+
+loadLocalStore()
 
 export const connectDatabase = () => {
   if (useLocalStore) {
@@ -31,7 +86,7 @@ export const connectDatabase = () => {
 
   if (!mongoConnectionPromise) {
     mongoConnectionPromise = mongoose
-      .connect(MONGODB_URI, { serverSelectionTimeoutMS: 1500 })
+      .connect(MONGODB_URI, { serverSelectionTimeoutMS: MONGODB_TIMEOUT_MS })
       .catch((error) => {
         mongoConnectionPromise = null
         useLocalStore = true
@@ -141,6 +196,8 @@ const createLocalLoginLog = ({ user, action }) => {
     action,
     createdAt: new Date(),
   })
+
+  saveLocalStore()
 }
 
 const requireAdmin = (req, res, next) => {
@@ -167,10 +224,12 @@ app.get('/', (_req, res) => {
   res.json({ message: 'Backend API is running' })
 })
 
-app.get('/api/health', (_req, res) => {
+app.get('/api/health', async (_req, res) => {
+  const databaseConnected = await canUseDatabase()
+
   res.json({
     message: 'MERN API is running',
-    database: mongoose.connection.readyState === 1 ? 'connected' : 'local-memory',
+    database: databaseConnected ? 'connected' : 'local-file',
   })
 })
 
