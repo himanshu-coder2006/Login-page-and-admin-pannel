@@ -1,5 +1,8 @@
 const CONFIGURED_API_URL = import.meta.env.VITE_API_URL || ''
 const LOCAL_API_URL = 'http://127.0.0.1:5000'
+const isLocalBrowser =
+  typeof window !== 'undefined' &&
+  ['localhost', '127.0.0.1'].includes(window.location.hostname)
 
 const createMissingApiError = () => {
   const error = new Error(
@@ -15,7 +18,7 @@ const getRequestUrls = (path) => {
     return [`${CONFIGURED_API_URL}${path}`]
   }
 
-  return [path, `${LOCAL_API_URL}${path}`]
+  return isLocalBrowser ? [path, `${LOCAL_API_URL}${path}`] : [path]
 }
 
 const parseResponse = async (response) => {
