@@ -161,10 +161,10 @@ const AdminPage = () => {
 
                 {users.map((user) => (
                   <div className="data-row" key={user.id}>
-                    <strong>{user.name}</strong>
-                    <span>{user.email}</span>
-                    <span>{user.loginCount}</span>
-                    <span>{formatDate(user.lastLoginAt)}</span>
+                    <strong data-label="Name">{user.name}</strong>
+                    <span data-label="Email">{user.email}</span>
+                    <span data-label="Logins">{user.loginCount}</span>
+                    <span data-label="Last login">{formatDate(user.lastLoginAt)}</span>
                   </div>
                 ))}
               </div>
