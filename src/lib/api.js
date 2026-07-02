@@ -47,6 +47,8 @@ const request = async (path, options = {}) => {
   const urls = getRequestUrls(path)
 
   for (const [index, url] of urls.entries()) {
+    const hasFallbackUrl = index < urls.length - 1
+
     try {
       const response = await fetch(url, {
         method: options.method || 'GET',
@@ -57,13 +59,20 @@ const request = async (path, options = {}) => {
       const data = await parseResponse(response)
 
       if (!response.ok) {
+        const isProxyFailure =
+          !CONFIGURED_API_URL &&
+          url === path &&
+          [502, 503, 504].includes(response.status)
+
+        if (hasFallbackUrl && isProxyFailure) {
+          continue
+        }
+
         throw new Error(data?.message || `Request failed (${response.status})`)
       }
 
       return data
     } catch (error) {
-      const hasFallbackUrl = index < urls.length - 1
-
       if (hasFallbackUrl && error.name === 'MissingApiError') {
         continue
       }

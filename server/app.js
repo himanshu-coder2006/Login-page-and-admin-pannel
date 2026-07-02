@@ -4,6 +4,7 @@ import dotenv from 'dotenv'
 import express from 'express'
 import jwt from 'jsonwebtoken'
 import mongoose from 'mongoose'
+import crypto from 'node:crypto'
 
 dotenv.config()
 
@@ -15,17 +16,27 @@ const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@example.com'
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin123'
 
 let mongoConnectionPromise = null
+let useLocalStore = false
+const localUsers = []
+const localLoginLogs = []
 
 export const connectDatabase = () => {
+  if (useLocalStore) {
+    return Promise.reject(new Error('Using local memory store'))
+  }
+
   if (mongoose.connection.readyState === 1) {
     return Promise.resolve(mongoose.connection)
   }
 
   if (!mongoConnectionPromise) {
-    mongoConnectionPromise = mongoose.connect(MONGODB_URI).catch((error) => {
-      mongoConnectionPromise = null
-      throw error
-    })
+    mongoConnectionPromise = mongoose
+      .connect(MONGODB_URI, { serverSelectionTimeoutMS: 1500 })
+      .catch((error) => {
+        mongoConnectionPromise = null
+        useLocalStore = true
+        throw error
+      })
   }
 
   return mongoConnectionPromise
@@ -34,19 +45,14 @@ export const connectDatabase = () => {
 app.use(cors())
 app.use(express.json())
 
-app.use(async (req, _res, next) => {
-  if (req.path === '/api/health') {
-    next()
-    return
-  }
-
+const canUseDatabase = async () => {
   try {
     await connectDatabase()
-    next()
-  } catch (error) {
-    next(error)
+    return true
+  } catch {
+    return false
   }
-})
+}
 
 const userSchema = new mongoose.Schema(
   {
@@ -124,6 +130,19 @@ const toSafeUser = (user) => ({
   loginCount: user.loginCount,
 })
 
+const sortNewestFirst = (items) =>
+  [...items].sort((first, second) => second.createdAt - first.createdAt)
+
+const createLocalLoginLog = ({ user, action }) => {
+  localLoginLogs.unshift({
+    _id: crypto.randomUUID(),
+    name: user.name,
+    email: user.email,
+    action,
+    createdAt: new Date(),
+  })
+}
+
 const requireAdmin = (req, res, next) => {
   const token = req.headers.authorization?.replace('Bearer ', '')
 
@@ -151,11 +170,16 @@ app.get('/', (_req, res) => {
 app.get('/api/health', (_req, res) => {
   res.json({
     message: 'MERN API is running',
-    database: mongoose.connection.readyState === 1 ? 'connected' : 'offline',
+    database: mongoose.connection.readyState === 1 ? 'connected' : 'local-memory',
   })
 })
 
 app.get('/api/users', async (_req, res) => {
+  if (!(await canUseDatabase())) {
+    res.json(sortNewestFirst(localUsers).map(toSafeUser))
+    return
+  }
+
   const users = await User.find()
     .sort({ createdAt: -1 })
     .select('name email createdAt')
@@ -176,6 +200,34 @@ app.post('/api/auth/register', async (req, res) => {
     return res
       .status(400)
       .json({ message: 'Password minimum 6 characters ka hona chahiye' })
+  }
+
+  if (!(await canUseDatabase())) {
+    const existingLocalUser = localUsers.find((user) => user.email === email)
+
+    if (existingLocalUser) {
+      return res.status(409).json({ message: 'Email already registered hai' })
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 12)
+    const user = {
+      _id: crypto.randomUUID(),
+      name,
+      email,
+      password: hashedPassword,
+      createdAt: new Date(),
+      lastLoginAt: new Date(),
+      loginCount: 1,
+    }
+
+    localUsers.push(user)
+    createLocalLoginLog({ user, action: 'register' })
+
+    return res.status(201).json({
+      message: 'Account create ho gaya',
+      token: createUserToken(user._id),
+      user: toSafeUser(user),
+    })
   }
 
   const existingUser = await User.findOne({ email })
@@ -213,6 +265,30 @@ app.post('/api/auth/login', async (req, res) => {
 
   if (!email || !password) {
     return res.status(400).json({ message: 'Email and password required' })
+  }
+
+  if (!(await canUseDatabase())) {
+    const user = localUsers.find((localUser) => localUser.email === email)
+
+    if (!user) {
+      return res.status(401).json({ message: 'Invalid email ya password' })
+    }
+
+    const isPasswordValid = await bcrypt.compare(password, user.password)
+
+    if (!isPasswordValid) {
+      return res.status(401).json({ message: 'Invalid email ya password' })
+    }
+
+    user.lastLoginAt = new Date()
+    user.loginCount += 1
+    createLocalLoginLog({ user, action: 'login' })
+
+    return res.json({
+      message: 'Login successful',
+      token: createUserToken(user._id),
+      user: toSafeUser(user),
+    })
   }
 
   const user = await User.findOne({ email }).select('+password')
@@ -263,6 +339,11 @@ app.post('/api/admin/login', (req, res) => {
 })
 
 app.get('/api/admin/users', requireAdmin, async (_req, res) => {
+  if (!(await canUseDatabase())) {
+    res.json(sortNewestFirst(localUsers).map(toSafeUser))
+    return
+  }
+
   const users = await User.find()
     .sort({ createdAt: -1 })
     .select('name email createdAt lastLoginAt loginCount')
@@ -271,6 +352,19 @@ app.get('/api/admin/users', requireAdmin, async (_req, res) => {
 })
 
 app.get('/api/admin/logins', requireAdmin, async (_req, res) => {
+  if (!(await canUseDatabase())) {
+    res.json(
+      localLoginLogs.slice(0, 30).map((log) => ({
+        id: log._id,
+        name: log.name,
+        email: log.email,
+        action: log.action,
+        loggedAt: log.createdAt,
+      })),
+    )
+    return
+  }
+
   const logs = await LoginLog.find()
     .sort({ createdAt: -1 })
     .limit(30)
@@ -289,6 +383,14 @@ app.get('/api/admin/logins', requireAdmin, async (_req, res) => {
 
 app.use((err, _req, res, _next) => {
   console.error(err)
+  if (err.name === 'MongooseServerSelectionError') {
+    res.status(503).json({
+      message:
+        'Database connect nahi ho rahi. MongoDB start karo ya MONGODB_URI check karo.',
+    })
+    return
+  }
+
   res.status(500).json({ message: 'Server error, thoda baad try karo' })
 })
 
