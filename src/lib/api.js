@@ -116,6 +116,24 @@ export const fetchAdminUsers = (token) =>
     token,
   })
 
+export const fetchAdminOverview = (token) =>
+  request('/api/admin/overview', {
+    token,
+  })
+
+export const updateAdminUser = (token, userId, body) =>
+  request(`/api/admin/users/${userId}`, {
+    method: 'PATCH',
+    token,
+    body,
+  })
+
+export const deleteAdminUser = (token, userId) =>
+  request(`/api/admin/users/${userId}`, {
+    method: 'DELETE',
+    token,
+  })
+
 export const fetchLoginLogs = (token) =>
   request('/api/admin/logins', {
     token,

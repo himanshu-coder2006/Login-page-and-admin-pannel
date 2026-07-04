@@ -19,7 +19,8 @@
     "jsonwebtoken": "^9.0.3",
     "mongoose": "^9.7.3",
     "react": "^19.2.7",
-    "react-dom": "^19.2.7"
+    "react-dom": "^19.2.7",
+    "three": "^0.185.1"
   },
   "devDependencies": {
     "@types/react": "^19.2.17",

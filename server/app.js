@@ -188,6 +188,53 @@ const toSafeUser = (user) => ({
 const sortNewestFirst = (items) =>
   [...items].sort((first, second) => second.createdAt - first.createdAt)
 
+const toLocalDateKey = (dateValue) => {
+  const date = new Date(dateValue)
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+
+  return `${year}-${month}-${day}`
+}
+
+const createSevenDayBuckets = () => {
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+
+  return Array.from({ length: 7 }, (_item, index) => {
+    const date = new Date(today)
+    date.setDate(today.getDate() - (6 - index))
+
+    return {
+      date: toLocalDateKey(date),
+      label: date.toLocaleDateString('en-IN', {
+        day: '2-digit',
+        month: 'short',
+      }),
+      logins: 0,
+      registrations: 0,
+      total: 0,
+    }
+  })
+}
+
+const addLogToBuckets = (buckets, log) => {
+  const key = toLocalDateKey(log.createdAt)
+  const bucket = buckets.find((item) => item.date === key)
+
+  if (!bucket) {
+    return
+  }
+
+  if (log.action === 'register') {
+    bucket.registrations += 1
+  } else {
+    bucket.logins += 1
+  }
+
+  bucket.total += 1
+}
+
 const createLocalLoginLog = ({ user, action }) => {
   localLoginLogs.unshift({
     _id: crypto.randomUUID(),
@@ -198,6 +245,23 @@ const createLocalLoginLog = ({ user, action }) => {
   })
 
   saveLocalStore()
+}
+
+const updateLocalLoginIdentity = ({ email, name, previousEmail }) => {
+  localLoginLogs.forEach((log) => {
+    if (log.email === previousEmail) {
+      log.email = email
+      log.name = name
+    }
+  })
+}
+
+const deleteLocalLoginLogs = (email) => {
+  for (let index = localLoginLogs.length - 1; index >= 0; index -= 1) {
+    if (localLoginLogs[index].email === email) {
+      localLoginLogs.splice(index, 1)
+    }
+  }
 }
 
 const requireAdmin = (req, res, next) => {
@@ -408,6 +472,197 @@ app.get('/api/admin/users', requireAdmin, async (_req, res) => {
     .select('name email createdAt lastLoginAt loginCount')
 
   res.json(users.map(toSafeUser))
+})
+
+app.patch('/api/admin/users/:id', requireAdmin, async (req, res) => {
+  const name = String(req.body.name || '').trim()
+  const email = String(req.body.email || '').trim().toLowerCase()
+
+  if (!name || !email) {
+    return res.status(400).json({ message: 'Name aur email required hain' })
+  }
+
+  if (name.length < 2) {
+    return res.status(400).json({ message: 'Name minimum 2 characters ka hona chahiye' })
+  }
+
+  if (!(await canUseDatabase())) {
+    const userIndex = localUsers.findIndex((user) => user._id === req.params.id)
+
+    if (userIndex === -1) {
+      return res.status(404).json({ message: 'User nahi mila' })
+    }
+
+    const duplicateEmail = localUsers.some(
+      (user) => user.email === email && user._id !== req.params.id,
+    )
+
+    if (duplicateEmail) {
+      return res.status(409).json({ message: 'Email already registered hai' })
+    }
+
+    const previousEmail = localUsers[userIndex].email
+    localUsers[userIndex].name = name
+    localUsers[userIndex].email = email
+    updateLocalLoginIdentity({ email, name, previousEmail })
+    saveLocalStore()
+
+    return res.json({
+      message: 'User update ho gaya',
+      user: toSafeUser(localUsers[userIndex]),
+    })
+  }
+
+  if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+    return res.status(404).json({ message: 'User nahi mila' })
+  }
+
+  const duplicateUser = await User.findOne({
+    email,
+    _id: { $ne: req.params.id },
+  })
+
+  if (duplicateUser) {
+    return res.status(409).json({ message: 'Email already registered hai' })
+  }
+
+  const user = await User.findByIdAndUpdate(
+    req.params.id,
+    { email, name },
+    { new: true, runValidators: true },
+  ).select('name email createdAt lastLoginAt loginCount')
+
+  if (!user) {
+    return res.status(404).json({ message: 'User nahi mila' })
+  }
+
+  await LoginLog.updateMany({ user: user._id }, { email: user.email, name: user.name })
+
+  res.json({
+    message: 'User update ho gaya',
+    user: toSafeUser(user),
+  })
+})
+
+app.delete('/api/admin/users/:id', requireAdmin, async (req, res) => {
+  if (!(await canUseDatabase())) {
+    const userIndex = localUsers.findIndex((user) => user._id === req.params.id)
+
+    if (userIndex === -1) {
+      return res.status(404).json({ message: 'User nahi mila' })
+    }
+
+    const [deletedUser] = localUsers.splice(userIndex, 1)
+    deleteLocalLoginLogs(deletedUser.email)
+    saveLocalStore()
+
+    return res.json({ message: 'User delete ho gaya' })
+  }
+
+  if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+    return res.status(404).json({ message: 'User nahi mila' })
+  }
+
+  const user = await User.findByIdAndDelete(req.params.id)
+
+  if (!user) {
+    return res.status(404).json({ message: 'User nahi mila' })
+  }
+
+  await LoginLog.deleteMany({ user: user._id })
+
+  res.json({ message: 'User delete ho gaya' })
+})
+
+app.get('/api/admin/overview', requireAdmin, async (_req, res) => {
+  const now = new Date()
+  const todayStart = new Date(now)
+  todayStart.setHours(0, 0, 0, 0)
+
+  const weekStart = new Date(todayStart)
+  weekStart.setDate(todayStart.getDate() - 6)
+
+  if (!(await canUseDatabase())) {
+    const activityByDay = createSevenDayBuckets()
+    const recentLogs = localLoginLogs.filter((log) => log.createdAt >= weekStart)
+
+    recentLogs.forEach((log) => addLogToBuckets(activityByDay, log))
+
+    const recentRegistrations = sortNewestFirst(localUsers)
+      .slice(0, 5)
+      .map(toSafeUser)
+
+    const topUsers = [...localUsers]
+      .sort((first, second) => second.loginCount - first.loginCount)
+      .slice(0, 5)
+      .map(toSafeUser)
+
+    res.json({
+      database: 'local-file',
+      users: {
+        total: localUsers.length,
+        activeToday: localUsers.filter((user) => user.lastLoginAt >= todayStart)
+          .length,
+        newThisWeek: localUsers.filter((user) => user.createdAt >= weekStart)
+          .length,
+        inactive: localUsers.filter((user) => !user.lastLoginAt).length,
+      },
+      logins: {
+        total: localLoginLogs.length,
+        last7Days: recentLogs.length,
+      },
+      recentRegistrations,
+      topUsers,
+      activityByDay,
+    })
+    return
+  }
+
+  const [
+    totalUsers,
+    activeToday,
+    newThisWeek,
+    inactive,
+    totalLogs,
+    recentLogs,
+    recentRegistrations,
+    topUsers,
+  ] = await Promise.all([
+    User.countDocuments(),
+    User.countDocuments({ lastLoginAt: { $gte: todayStart } }),
+    User.countDocuments({ createdAt: { $gte: weekStart } }),
+    User.countDocuments({ lastLoginAt: null }),
+    LoginLog.countDocuments(),
+    LoginLog.find({ createdAt: { $gte: weekStart } }).select('action createdAt'),
+    User.find()
+      .sort({ createdAt: -1 })
+      .limit(5)
+      .select('name email createdAt lastLoginAt loginCount'),
+    User.find()
+      .sort({ loginCount: -1, lastLoginAt: -1 })
+      .limit(5)
+      .select('name email createdAt lastLoginAt loginCount'),
+  ])
+
+  const activityByDay = createSevenDayBuckets()
+  recentLogs.forEach((log) => addLogToBuckets(activityByDay, log))
+
+  res.json({
+    database: 'connected',
+    users: {
+      total: totalUsers,
+      activeToday,
+      newThisWeek,
+      inactive,
+    },
+    logins: {
+      total: totalLogs,
+      last7Days: recentLogs.length,
+    },
+    recentRegistrations: recentRegistrations.map(toSafeUser),
+    topUsers: topUsers.map(toSafeUser),
+    activityByDay,
+  })
 })
 
 app.get('/api/admin/logins', requireAdmin, async (_req, res) => {

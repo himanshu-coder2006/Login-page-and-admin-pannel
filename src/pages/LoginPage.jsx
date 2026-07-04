@@ -43,8 +43,8 @@ const LoginPage = ({ onNavigate }) => {
   return (
     <AuthPanel
       eyebrow="User Login"
-      title="Welcome back"
-      subtitle="Email aur password se account access karo."
+      title="Enter the access realm"
+      subtitle="MongoDB backed account me secure session ke saath sign in karo."
       footer={
         <button className="text-action" type="button" onClick={() => onNavigate('/register')}>
           Create new account

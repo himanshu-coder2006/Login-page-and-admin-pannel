@@ -43,8 +43,8 @@ const RegisterPage = ({ onNavigate }) => {
   return (
     <AuthPanel
       eyebrow="Create Account"
-      title="Start a new profile"
-      subtitle="User details MongoDB me secure hash ke saath save honge."
+      title="Summon a new account"
+      subtitle="Profile create hote hi MongoDB me secure hash ke saath save hoga."
       footer={
         <button className="text-action" type="button" onClick={() => onNavigate('/login')}>
           Already registered? Sign in

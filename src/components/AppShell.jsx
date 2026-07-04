@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import SceneBackdrop from './SceneBackdrop.jsx'
 
 const navItems = [
   { id: 'login', label: 'Login', path: '/login' },
@@ -7,34 +7,20 @@ const navItems = [
 ]
 
 const AppShell = ({ activeRoute, apiState, children, onNavigate }) => {
-  const [isMenuOpen, setIsMenuOpen] = useState(false)
-
   const navigate = (path) => {
     onNavigate(path)
-    setIsMenuOpen(false)
   }
 
   return (
     <div className="app-frame">
-      <aside className={isMenuOpen ? 'sidebar menu-open' : 'sidebar'}>
+      <SceneBackdrop />
+      <header className="topbar">
         <button className="brand" type="button" onClick={() => navigate('/login')}>
-          <span>M</span>
+          <span>MA</span>
           <div>
-            <strong>MERN Auth</strong>
-            <small>Secure user access</small>
+            <strong>MERN Access</strong>
+            <small>Accounts and admin console</small>
           </div>
-        </button>
-
-        <button
-          aria-expanded={isMenuOpen}
-          aria-label="Toggle navigation menu"
-          className="menu-button"
-          type="button"
-          onClick={() => setIsMenuOpen((current) => !current)}
-        >
-          <span />
-          <span />
-          <span />
         </button>
 
         <nav className="main-nav" aria-label="Main navigation">
@@ -54,7 +40,7 @@ const AppShell = ({ activeRoute, apiState, children, onNavigate }) => {
           <span />
           {apiState.label}
         </div>
-      </aside>
+      </header>
 
       <main className="page-shell">{children}</main>
     </div>
